@@ -1,0 +1,6 @@
+{
+  "name": "DocCraft",
+  "description": "Professional commercial-grade word processing application with paginated layout, rich text formatting, tables, images, track changes, comments, DOCX & PDF export.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
