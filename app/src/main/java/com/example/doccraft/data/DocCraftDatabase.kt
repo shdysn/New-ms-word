@@ -20,7 +20,7 @@ abstract class DocCraftDatabase : RoomDatabase() {
                     DocCraftDatabase::class.java,
                     "doccraft_database"
                 )
-                    .fallbackToDestructiveMigration()
+                    .fallbackToDestructiveMigration(dropAllTables = true)
                     .build()
                 INSTANCE = instance
                 instance
