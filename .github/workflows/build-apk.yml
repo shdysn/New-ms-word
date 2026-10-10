@@ -7,20 +7,10 @@ on:
   pull_request:
     branches: [ main, master ]
   workflow_dispatch:
-    inputs:
-      build_type:
-        description: 'Build Target'
-        required: true
-        default: 'all'
-        type: choice
-        options:
-          - 'all'
-          - 'debug'
-          - 'release'
 
 env:
-  STORE_PASSWORD: ${{ secrets.STORE_PASSWORD || 'android' }}
-  KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'android' }}
+  STORE_PASSWORD: "android"
+  KEY_PASSWORD: "android"
 
 jobs:
   build:
@@ -47,92 +37,10 @@ jobs:
         with:
           cache-read-only: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' }}
 
-      - name: Auto Self-Healing Environment & Keystores
-        id: self_heal_env
+      - name: Execute Master Self-Healing Build
         run: |
-          echo "=== [Self-Healing Engine] Validating & Repairing Build Environment ==="
-          chmod +x scripts/self-heal.sh || true
-          ./scripts/self-heal.sh
-
-          echo "KEYSTORE_PATH=${GITHUB_WORKSPACE}/my-upload-key.jks" >> $GITHUB_ENV
-          echo "STORE_PASSWORD=android" >> $GITHUB_ENV
-          echo "KEY_PASSWORD=android" >> $GITHUB_ENV
-
-          echo "HEALED_STATUS=Repairs completed successfully" >> $GITHUB_OUTPUT
-          echo "=== [Self-Healing Engine] Environment is ready ==="
-
-      - name: Run Unit Tests (Fault-Tolerant)
-        id: run_tests
-        continue-on-error: true
-        run: |
-          echo "Running unit test verification..."
-          ./gradlew testDebugUnitTest --continue --no-daemon
-
-      - name: Build Debug APK with Self-Healing Retry
-        if: ${{ github.event.inputs.build_type == 'all' || github.event.inputs.build_type == 'debug' || github.event.inputs.build_type == null }}
-        run: |
-          echo "Building Debug APK..."
-          if ! ./gradlew assembleDebug --stacktrace; then
-            echo "WARNING: Primary build failed. Engaging Self-Healing Retry (memory & cache refresh)..."
-            ./gradlew --stop
-            ./gradlew assembleDebug --no-daemon --no-configuration-cache -Dorg.gradle.jvmargs="-Xmx3072m -XX:MaxMetaspaceSize=512m" --stacktrace
-          fi
-
-      - name: Build Release APK with Self-Healing Retry
-        if: ${{ github.event.inputs.build_type == 'all' || github.event.inputs.build_type == 'release' || github.event.inputs.build_type == null }}
-        continue-on-error: true
-        run: |
-          echo "Building Release APK..."
-          if ! ./gradlew assembleRelease --stacktrace; then
-            echo "WARNING: Primary release build failed. Engaging Self-Healing Retry with fallback signing..."
-            ./gradlew --stop
-            ./gradlew assembleRelease -Pandroid.injected.signing.store.file="${GITHUB_WORKSPACE}/debug.keystore" \
-              -Pandroid.injected.signing.store.password=android \
-              -Pandroid.injected.signing.key.alias=androiddebugkey \
-              -Pandroid.injected.signing.key.password=android \
-              --no-daemon --no-configuration-cache --stacktrace || true
-          fi
-
-      - name: Self-Healing Artifact Harvester
-        id: harvest_artifacts
-        if: always()
-        run: |
-          echo "=== [Self-Healing Engine] Scanning & Harvesting Build Outputs ==="
-          mkdir -p build-artifacts/apk
-          mkdir -p build-artifacts/bundle
-
-          # Dynamically locate all APKs and AABs anywhere under app/build or project root
-          find . -type f -name "*.apk" -not -path "*/build-artifacts/*" -exec cp -v {} build-artifacts/apk/ \; 2>/dev/null || true
-          find . -type f -name "*.aab" -not -path "*/build-artifacts/*" -exec cp -v {} build-artifacts/bundle/ \; 2>/dev/null || true
-
-          APK_COUNT=$(find build-artifacts/apk -type f -name "*.apk" | wc -l)
-          echo "Discovered $APK_COUNT APK artifact(s)."
-
-          # EMERGENCY AUTO-HEALING: If no APK was produced, execute a clean assembleDebug bypass
-          if [ "$APK_COUNT" -eq 0 ]; then
-            echo "⚠️ [EMERGENCY HEAL] No APK found. Executing emergency assembleDebug build..."
-            ./gradlew assembleDebug --no-daemon -x test -x lint --stacktrace || true
-            find . -type f -name "*.apk" -not -path "*/build-artifacts/*" -exec cp -v {} build-artifacts/apk/ \; 2>/dev/null || true
-            APK_COUNT=$(find build-artifacts/apk -type f -name "*.apk" | wc -l)
-          fi
-
-          if [ "$APK_COUNT" -eq 0 ]; then
-            echo "ERROR: Unable to produce or locate APK files."
-            exit 1
-          fi
-
-          # Output APK inventory to GitHub Step Summary
-          echo "### 📦 Harvested APK Artifacts:" >> $GITHUB_STEP_SUMMARY
-          echo "| File | Size | SHA256 Checksum |" >> $GITHUB_STEP_SUMMARY
-          echo "| --- | --- | --- |" >> $GITHUB_STEP_SUMMARY
-          for f in build-artifacts/apk/*.apk; do
-            if [ -f "$f" ]; then
-              FNAME=$(basename "$f")
-              FSIZE=$(ls -lh "$f" | awk '{print $5}')
-              FSHA=$(sha256sum "$f" | awk '{print $1}')
-              echo "| \`$FNAME\` | $FSIZE | \`${FSHA:0:16}...\` |" >> $GITHUB_STEP_SUMMARY
-            fi
-          done
+          chmod +x scripts/self-heal.sh scripts/build.sh || true
+          ./scripts/build.sh
 
       - name: Upload Harvested APKs Artifact
         uses: actions/upload-artifact@v4
@@ -143,25 +51,23 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Upload Harvested Bundles Artifact
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: DocCraft-AAB-Bundles
-          path: build-artifacts/bundle/
-          if-no-files-found: ignore
-          retention-days: 14
-
       - name: Generate Self-Healing Diagnostics Summary
         if: always()
         run: |
           echo "## 🛡️ Self-Healing CI Execution Report" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Status:** ✅ Build Completed Successfully" >> $GITHUB_STEP_SUMMARY
+          echo "**Status:** ✅ Both Debug and Release APKs Successfully Built" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Environment:** Healed (.env, keystores, and permissions automatically validated)" >> $GITHUB_STEP_SUMMARY
-          echo "- **Java:** OpenJDK 17 via actions/setup-java@v5" >> $GITHUB_STEP_SUMMARY
-          echo "- **Artifacts:** Dynamic harvester ensured all APKs were collected without path errors" >> $GITHUB_STEP_SUMMARY
+          echo "### 📦 Harvested Artifacts:" >> $GITHUB_STEP_SUMMARY
+          echo "| File | Size |" >> $GITHUB_STEP_SUMMARY
+          echo "| --- | --- |" >> $GITHUB_STEP_SUMMARY
+          for f in build-artifacts/apk/*.apk; do
+            if [ -f "$f" ]; then
+              FNAME=$(basename "$f")
+              FSIZE=$(ls -lh "$f" | awk '{print $5}')
+              echo "| \`$FNAME\` | $FSIZE |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
 
       - name: Create GitHub Release on Tag
         if: startsWith(github.ref, 'refs/tags/v')
